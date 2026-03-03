@@ -12,6 +12,7 @@ export interface Indicators {
     momentum: number; momentumHistory?: number[];
     atr: number; orderBlocks: OrderBlock[];
     currentPrice: number; timestamp: number;
+    S?: any;
 }
 
 export interface Prediction {
@@ -68,6 +69,11 @@ export interface LifetimeStats {
 
 export interface ISTTick { istIso: string; istHour: number; istMinute: number; istSecond: number; }
 
+export interface DualAIState { live: AIState; snap: AIState; }
+export interface DualDailyStats { live: DailyStats; snap: DailyStats; }
+export interface DualLifetimeStats { live: LifetimeStats; snap: LifetimeStats; }
+export interface DualGenerations { live: GenerationRecord[]; snap: GenerationRecord[]; }
+
 export type WSMessage =
     | { type: 'INIT'; data: any }
     | { type: 'TICK'; data: { price: number; time: number; currentCandle: Candle } }
@@ -76,17 +82,17 @@ export type WSMessage =
     | { type: 'INDICATORS'; data: Indicators }
     | { type: 'PREDICTIONS'; data: Record<string, Prediction | null> }
     | { type: 'EVALUATION'; data: PredictionLog }
-    | { type: 'AI_STATUS'; data: AIState }
-    | { type: 'AI_DIED'; data: { generation: number; accuracy: number; reason?: string } }
-    | { type: 'AI_REVIVED'; data: AIState }
-    | { type: 'LIFE_LOST'; data: { livesLeft: number } }
+    | { type: 'AI_STATUS'; data: DualAIState }
+    | { type: 'AI_DIED'; data: { mode: 'LIVE' | 'SNAP'; generation: number; accuracy: number; reason?: string } }
+    | { type: 'AI_REVIVED'; data: DualAIState }
+    | { type: 'LIFE_LOST'; data: { mode: 'LIVE' | 'SNAP'; livesLeft: number } }
     | { type: 'CONNECTION'; data: { connected: boolean } }
     | { type: 'PRICE'; data: { price: number; time: number } }
     | { type: 'SNAPSHOT_CREATED'; data: SnapshotRecord }
     | { type: 'SNAPSHOT_EVALUATED'; data: SnapshotRecord }
     | { type: 'SNAPSHOTS_UPDATE'; data: SnapshotRecord[] }
-    | { type: 'GENERATIONS'; data: GenerationRecord[] }
-    | { type: 'DAILY_STATS'; data: DailyStats }
-    | { type: 'DAILY_RESET'; data: DailyStats }
-    | { type: 'LIFETIME_STATS'; data: LifetimeStats }
+    | { type: 'GENERATIONS'; data: DualGenerations }
+    | { type: 'DAILY_STATS'; data: DualDailyStats }
+    | { type: 'DAILY_RESET'; data: DualDailyStats }
+    | { type: 'LIFETIME_STATS'; data: DualLifetimeStats }
     | { type: 'IST_TICK'; data: ISTTick };

@@ -1,16 +1,17 @@
 'use client';
 import { useState } from 'react';
-import type { DailyStats, LifetimeStats } from '@/lib/types';
+import type { DualDailyStats, DualLifetimeStats } from '@/lib/types';
 
-interface Props { dailyStats: DailyStats; lifetimeStats: LifetimeStats; }
+interface Props { dailyStats: DualDailyStats; lifetimeStats: DualLifetimeStats; }
 
 const TF_COLORS: Record<string, string> = { '5m': '#a78bfa', '15m': '#60a5fa', '30m': '#fbbf24', '1h': '#34d399' };
 
 export default function PerformancePanel({ dailyStats, lifetimeStats }: Props) {
     const [tab, setTab] = useState<'daily' | 'lifetime'>('daily');
+    const [mode, setMode] = useState<'live' | 'snap'>('live');
 
-    const d = dailyStats;
-    const lt = lifetimeStats;
+    const d = dailyStats[mode];
+    const lt = lifetimeStats[mode];
 
     // Best/worst TF for daily
     const tfEntries = Object.entries(d.byTF || {});
@@ -19,26 +20,41 @@ export default function PerformancePanel({ dailyStats, lifetimeStats }: Props) {
     const worstTF = tfWithAcc.sort((a, b) => (a.acc || 100) - (b.acc || 100))[0];
 
     return (
-        <div className="glass rounded-xl border border-arena-border overflow-hidden">
-            {/* Tab header */}
-            <div className="flex border-b border-arena-border">
-                {(['daily', 'lifetime'] as const).map(t => (
-                    <button key={t} onClick={() => setTab(t)}
-                        className="flex-1 py-2.5 text-xs font-mono font-bold tracking-widest transition-colors"
+        <div className="glass rounded-xl border border-arena-border overflow-hidden flex flex-col">
+            {/* Mode Toggle Header */}
+            <div className="flex border-b border-arena-border bg-[#0a1628]">
+                {(['live', 'snap'] as const).map(m => (
+                    <button key={m} onClick={() => setMode(m)}
+                        className="flex-1 py-2 text-[10px] font-mono font-bold tracking-widest transition-colors"
                         style={{
-                            color: tab === t ? '#f59e0b' : '#64748b',
-                            background: tab === t ? 'rgba(245,158,11,0.06)' : 'transparent',
-                            borderBottom: tab === t ? '2px solid #f59e0b' : '2px solid transparent',
+                            color: mode === m ? (m === 'live' ? '#8b5cf6' : '#f59e0b') : '#64748b',
+                            background: mode === m ? (m === 'live' ? 'rgba(139,92,246,0.1)' : 'rgba(245,158,11,0.1)') : 'transparent',
+                            borderBottom: mode === m ? `2px solid ${m === 'live' ? '#8b5cf6' : '#f59e0b'}` : '2px solid transparent',
                         }}>
-                        {t === 'daily' ? '📅 DAILY' : '♾️ LIFETIME'}
+                        {m === 'live' ? 'LIVE PREDICTIONS' : 'IST SNAPSHOT ARENA'}
                     </button>
                 ))}
             </div>
 
-            <div className="p-4">
+            {/* Time Toggle Header */}
+            <div className="flex border-b border-arena-border">
+                {(['daily', 'lifetime'] as const).map(t => (
+                    <button key={t} onClick={() => setTab(t)}
+                        className="flex-1 py-1.5 text-xs font-mono font-bold tracking-widest transition-colors"
+                        style={{
+                            color: tab === t ? '#10b981' : '#64748b',
+                            background: tab === t ? 'rgba(16,185,129,0.06)' : 'transparent',
+                            borderBottom: tab === t ? '2px solid #10b981' : '2px solid transparent',
+                        }}>
+                        {t === 'daily' ? '📅 DAILY STATS' : '♾️ LIFETIME STATS'}
+                    </button>
+                ))}
+            </div>
+
+            <div className="p-4 flex-1">
                 {tab === 'daily' && (
                     <div className="space-y-3">
-                        <div className="text-xs font-mono text-slate-500 mb-2">Resets at 12:00 AM IST · {d.date || '—'}</div>
+                        <div className="text-xs font-mono text-slate-500 mb-2">Resets at 12:00 AM IST · {d.date || '—'} · {mode.toUpperCase()}</div>
                         <div className="grid grid-cols-3 gap-2">
                             {[
                                 { label: 'TOTAL', val: d.total, color: '#e2e8f0' },

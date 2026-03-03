@@ -40,11 +40,11 @@ export default function ArenaPage() {
 
     return (
         <div className="min-h-screen arena-grid flex flex-col">
-            <ArenaOverlay deathAnimation={deathAnimation} reviveAnimation={reviveAnimation} ai={ai} />
+            <ArenaOverlay deathAnimation={deathAnimation} reviveAnimation={reviveAnimation} ai={ai.live} />
             <EvaluationToast evaluation={latestEvaluation} />
 
             {/* Header */}
-            <Header price={price} connected={connected} accuracy={ai.rolling50Accuracy} />
+            <Header price={price} connected={connected} accuracy={ai.live.rolling50Accuracy} />
 
             <main className="flex-1 p-4 lg:p-5">
                 <div className="max-w-[1920px] mx-auto space-y-4">
@@ -71,12 +71,12 @@ export default function ArenaPage() {
                     </div>
 
                     {/* ROW 2: IST Snapshot Arena */}
-                    <ISTSnapshotArena snapshots={snapshots} istTick={istTick} ai={ai} snapshotFlash={snapshotFlash} price={price} />
+                    <ISTSnapshotArena snapshots={snapshots} istTick={istTick} ai={ai.snap} snapshotFlash={snapshotFlash} price={price} />
 
                     {/* ROW 3: Indicators + Prediction History */}
-                    <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4">
+                    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4">
                         <IndicatorsPanel indicators={activeIndicators} />
-                        <PredictionHistory history={history} ai={ai} />
+                        <PredictionHistory history={history} ai={ai.live} />
                     </div>
 
                     {/* ROW 4: Generation History + Performance Panel */}
@@ -90,10 +90,10 @@ export default function ArenaPage() {
 
             <footer className="border-t border-arena-border py-2.5 px-6 flex items-center justify-between">
                 <div className="text-xs font-mono text-slate-600">
-                    BTC Prediction Arena v2 · Coinbase WS · IST Engine · Weighted Scoring · Gen {ai.generation}
+                    BTC Prediction Arena v2 · Coinbase WS · IST Engine · Weighted Scoring · Live Gen {ai.live.generation} / Snap Gen {ai.snap.generation}
                 </div>
                 <div className="text-xs font-mono text-slate-700">
-                    Rolling 50: <span className={ai.rolling50Accuracy >= 65 ? 'text-emerald-500' : 'text-red-500'}>{ai.rolling50Accuracy}%</span>
+                    Rolling 50: <span className={ai.live.rolling50Accuracy >= 65 ? 'text-emerald-500' : 'text-red-500'}>{ai.live.rolling50Accuracy}% (Live)</span>
                     {' · '}Min 65% to survive · Not financial advice
                 </div>
             </footer>

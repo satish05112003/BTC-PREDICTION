@@ -52,9 +52,17 @@ let state = {
     tfIndicators: {}, indicators: {},
     predictions: { '5m': null, '15m': null, '30m': null, '1h': null },
     pendingEvaluations: [], history: [], snapshots: [], snapshotFiredKeys: new Set(),
-    rollingWindow: [], recentPreds: [],
-    ai: freshAI(1), generations: [], dailyStats: freshDaily(), lifetimeStats: freshLifetime(),
+    recentPreds: [],
+    aiLIVE: freshAI(1), aiSNAP: freshAI(1),
+    generationsLIVE: [], generationsSNAP: [],
+    dailyStatsLIVE: freshDaily(), dailyStatsSNAP: freshDaily(),
+    lifetimeStatsLIVE: freshLifetime(), lifetimeStatsSNAP: freshLifetime(),
+    rollingWindowLIVE: [], rollingWindowSNAP: [],
     connected: false, dataReady: false,
+    mlWeights: {
+        s_MACD: 0.1, s_RSI: 0.1, s_EMA: 0.1, s_OB: 0.15, s_VP: 0.1, s_VWAP: 0.15,
+        s_VOL: 0.1, s_MS: 0.1, s_H: 0.05, s_OI: 0.0, s_FR: 0.0, bias: 0
+    }
 };
 const clients = new Set();
 
@@ -62,15 +70,20 @@ const clients = new Set();
 function persist() {
     try {
         fs.writeFileSync(DATA_FILE, JSON.stringify({
-            generations: state.generations,
-            lifetimeStats: state.lifetimeStats,
-            dailyStats: state.dailyStats,
+            generationsLIVE: state.generationsLIVE, generationsSNAP: state.generationsSNAP,
+            lifetimeStatsLIVE: state.lifetimeStatsLIVE, lifetimeStatsSNAP: state.lifetimeStatsSNAP,
+            dailyStatsLIVE: state.dailyStatsLIVE, dailyStatsSNAP: state.dailyStatsSNAP,
             snapshots: state.snapshots.slice(0, 200),
             snapshotFiredKeys: [...state.snapshotFiredKeys].slice(-300),
-            ai: {
-                generation: state.ai.generation, startTime: state.ai.startTime,
-                longestWinStreak: state.ai.longestWinStreak, longestLossStreak: state.ai.longestLossStreak
+            aiLIVE: {
+                generation: state.aiLIVE.generation, startTime: state.aiLIVE.startTime,
+                longestWinStreak: state.aiLIVE.longestWinStreak, longestLossStreak: state.aiLIVE.longestLossStreak
             },
+            aiSNAP: {
+                generation: state.aiSNAP.generation, startTime: state.aiSNAP.startTime,
+                longestWinStreak: state.aiSNAP.longestWinStreak, longestLossStreak: state.aiSNAP.longestLossStreak
+            },
+            mlWeights: state.mlWeights,
         }, null, 2));
     } catch (e) { console.error('[PERSIST] write fail:', e.message); }
 }
@@ -78,19 +91,33 @@ function loadPersisted() {
     try {
         if (!fs.existsSync(DATA_FILE)) return;
         const s = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-        if (s.generations) state.generations = s.generations;
-        if (s.lifetimeStats) state.lifetimeStats = { ...freshLifetime(), ...s.lifetimeStats };
+        if (s.generationsLIVE) { state.generationsLIVE = s.generationsLIVE; state.generationsSNAP = s.generationsSNAP || JSON.parse(JSON.stringify(s.generationsLIVE)); }
+        else if (s.generations) { state.generationsLIVE = s.generations; state.generationsSNAP = JSON.parse(JSON.stringify(s.generations)); }
+
+        if (s.lifetimeStatsLIVE) { state.lifetimeStatsLIVE = { ...freshLifetime(), ...s.lifetimeStatsLIVE }; state.lifetimeStatsSNAP = { ...freshLifetime(), ...(s.lifetimeStatsSNAP || s.lifetimeStatsLIVE) }; }
+        else if (s.lifetimeStats) { state.lifetimeStatsLIVE = { ...freshLifetime(), ...s.lifetimeStats }; state.lifetimeStatsSNAP = { ...freshLifetime(), ...s.lifetimeStats }; }
+
         if (s.snapshots) state.snapshots = s.snapshots;
         if (s.snapshotFiredKeys) state.snapshotFiredKeys = new Set(s.snapshotFiredKeys);
-        if (s.dailyStats && s.dailyStats.date === istDateStr()) state.dailyStats = s.dailyStats;
-        if (s.ai) {
-            state.ai.generation = s.ai.generation || 1;
-            state.ai.startTime = s.ai.startTime || Date.now();
-            state.ai.longestWinStreak = s.ai.longestWinStreak || 0;
-            state.ai.longestLossStreak = s.ai.longestLossStreak || 0;
-        }
-        state.lifetimeStats.totalGenerations = Math.max(state.ai.generation, state.generations.length + 1);
-        console.log(`[PERSIST] Gen ${state.ai.generation} | ${state.generations.length} dead gens | ${state.snapshots.length} snaps`);
+
+        if (s.dailyStatsLIVE && s.dailyStatsLIVE.date === istDateStr()) { state.dailyStatsLIVE = s.dailyStatsLIVE; state.dailyStatsSNAP = s.dailyStatsSNAP || JSON.parse(JSON.stringify(s.dailyStatsLIVE)); }
+        else if (s.dailyStats && s.dailyStats.date === istDateStr()) { state.dailyStatsLIVE = s.dailyStats; state.dailyStatsSNAP = JSON.parse(JSON.stringify(s.dailyStats)); }
+
+        if (s.mlWeights) state.mlWeights = s.mlWeights;
+
+        const loadAI = (from, to) => {
+            if (!from) return;
+            to.generation = from.generation || 1;
+            to.startTime = from.startTime || Date.now();
+            to.longestWinStreak = from.longestWinStreak || 0;
+            to.longestLossStreak = from.longestLossStreak || 0;
+        };
+        loadAI(s.aiLIVE || s.ai, state.aiLIVE);
+        loadAI(s.aiSNAP || s.ai, state.aiSNAP);
+
+        state.lifetimeStatsLIVE.totalGenerations = Math.max(state.aiLIVE.generation, state.generationsLIVE.length + 1);
+        state.lifetimeStatsSNAP.totalGenerations = Math.max(state.aiSNAP.generation, state.generationsSNAP.length + 1);
+        console.log(`[PERSIST] Gen LIVE:${state.aiLIVE.generation} SNAP:${state.aiSNAP.generation} | ${state.snapshots.length} snaps`);
     } catch (e) { console.error('[PERSIST] load fail:', e.message); }
 }
 
@@ -138,6 +165,38 @@ function detectOB(candles, lb = 20) {
     }
     return blocks.slice(-5);
 }
+
+// ─── QUANT V5 HELPERS ────────────────────────────────────────────────────────
+function calcPOC(candles) {
+    if (!candles.length) return 0;
+    const bins = new Map(), binSize = candles[candles.length - 1].close * 0.001;
+    for (const c of candles) { const b = Math.floor(c.close / binSize) * binSize; bins.set(b, (bins.get(b) || 0) + c.volume); }
+    let maxV = 0, poc = candles[candles.length - 1].close;
+    for (const [p, v] of bins.entries()) if (v > maxV) { maxV = v; poc = p; }
+    return poc;
+}
+function calcVWAP(candles) {
+    let sumPV = 0, sumV = 0;
+    for (const c of candles) { const typ = (c.high + c.low + c.close) / 3; sumPV += typ * c.volume; sumV += c.volume; }
+    return sumV === 0 ? candles[candles.length - 1].close : sumPV / sumV;
+}
+function calcHurst(closes) {
+    if (closes.length < 20) return 0.5;
+    const n = closes.length, mean = closes.reduce((a, b) => a + b, 0) / n, devs = closes.map(c => c - mean);
+    let maxZ = -Infinity, minZ = Infinity, run = 0;
+    for (const d of devs) { run += d; if (run > maxZ) maxZ = run; if (run < minZ) minZ = run; }
+    const R = maxZ - minZ, S = Math.sqrt(devs.reduce((a, b) => a + b * b, 0) / n) || 1, H = Math.log(R / S) / Math.log(n);
+    return isNaN(H) ? 0.5 : Math.max(0, Math.min(1, H));
+}
+function calcBOS(candles, currentPrice, atr) {
+    if (candles.length < 10) return 0;
+    const highs = candles.map(c => c.high), lows = candles.map(c => c.low);
+    const swingHigh = Math.max(...highs.slice(-10, -1)), swingLow = Math.min(...lows.slice(-10, -1));
+    let bos = 0; if (currentPrice > swingHigh) bos = 1; else if (currentPrice < swingLow) bos = -1;
+    const ret = Math.abs(currentPrice - candles[candles.length - 2].close);
+    return bos * Math.min(1, ret / (atr || 1));
+}
+
 function aggCandles(base, mins) {
     if (mins <= 1) return base;
     const ps = mins * 60, groups = new Map();
@@ -164,16 +223,58 @@ function computeInd(candles) {
     const momentum = closes.length >= 6 ? ((closes[closes.length - 1] - closes[closes.length - 6]) / closes[closes.length - 6]) * 100 : 0;
     const atr = calcATR(candles, 14);
     const orderBlocks = detectOB(candles, 20);
-    // Sparklines
+    const currentPrice = closes[closes.length - 1];
+
+    // QUANT V5 NORMALIZED VECTORS
+    // 1. Order Book (Aggression via close/open)
+    let bidVol = 0, askVol = 0;
+    for (const c of candles.slice(-5)) { if (c.close > c.open) bidVol += c.volume; else askVol += c.volume; }
+    const obImbalance = (bidVol + askVol) === 0 ? 0 : (bidVol - askVol) / (bidVol + askVol);
+    const s_OB = Math.max(-1, Math.min(1, obImbalance));
+
+    // 2. Volume Profile POC
+    const poc = calcPOC(candles);
+    const s_VP = atr ? Math.tanh((currentPrice - poc) / atr) : 0;
+
+    // 3. VWAP
+    const vwap = calcVWAP(candles);
+    const s_VWAP = atr ? Math.tanh((currentPrice - vwap) / atr) : 0;
+
+    // 4. Volatility VR
+    const atrHist = [];
+    for (let i = Math.max(1, candles.length - 50); i <= candles.length; i++) atrHist.push(calcATR(candles.slice(0, i), 14) || 1);
+    const smaATR = atrHist.reduce((a, b) => a + b, 0) / (atrHist.length || 1);
+    const s_VOL = Math.tanh((atr / smaATR) - 1);
+
+    // 5. Market Structure
+    const s_MS = calcBOS(candles, currentPrice, atr);
+
+    // 6. Hurst Exponent
+    const hurst = calcHurst(closes.slice(-30));
+    const s_H = Math.max(-1, Math.min(1, 2 * (hurst - 0.5)));
+
+    // Classic features normalized
+    const s_MACD = macdData && atr ? Math.tanh((macdData.macdLine - macdData.signalLine) / atr) : 0;
+    const s_RSI = rsi14 ? Math.tanh((rsi14 - 50) / 20) : 0;
+    const s_EMA = ema50 && ema200 && atr ? Math.tanh((ema50[ema50.length - 1] - ema200[ema200.length - 1]) / atr) : 0;
+
+    // 7. Funding / OI (Spot approximations)
+    const s_OI = 0, s_FR = 0;
+
+    const S = { s_MACD, s_RSI, s_EMA, s_OB, s_VP, s_VWAP, s_VOL, s_MS, s_H, s_OI, s_FR };
+
+    // Sparklines for UI
     const rsiHist = [];
     for (let i = Math.max(15, closes.length - 35); i < closes.length; i++) { const v = calcRSI(closes.slice(0, i + 1), 14); if (v !== null) rsiHist.push(v); }
     const momHist = [];
     for (let i = 5; i < closes.length && momHist.length < 30; i++) { momHist.push(((closes[i] - closes[i - 5]) / closes[i - 5]) * 100); }
+
     return {
+        S, // Return the ML vector
         rsi: rsi14, rsiHistory: rsiHist.slice(-30),
         macd: macdData, ema50: ema50[ema50.length - 1] || null, ema200: ema200[ema200.length - 1] || null,
         volSpike, volHistory: vols.slice(-30), momentum, momentumHistory: momHist,
-        atr, orderBlocks, currentPrice: closes[closes.length - 1], timestamp: Date.now(),
+        atr, orderBlocks, currentPrice, timestamp: Date.now(),
     };
 }
 
@@ -189,81 +290,62 @@ function computeAllTF() {
     state.indicators = tf['1m'] || {};
 }
 
-// ─── UNIFIED WEIGHTED PREDICTION ENGINE ──────────────────────────────────────
-// Score: -100 to +100. UP if >+25, DOWN if <-25, NO TRADE if |score|<25
-function scoreIndicators(ind) {
-    if (!ind || !ind.rsi || !ind.macd) return null;
-    let score = 0; const reasons = [];
-
-    // 1. EMA Trend ±20
-    if (ind.ema50 && ind.ema200) {
-        if (ind.ema50 > ind.ema200) { score += 20; reasons.push('EMA uptrend +20'); }
-        else { score -= 20; reasons.push('EMA downtrend -20'); }
-    }
-    // 2. MACD Crossover ±15 strong / ±10 weak
-    const macdBull = ind.macd.macdLine > ind.macd.signalLine;
-    const histAbs = Math.abs(ind.macd.histogram);
-    const strong = histAbs > 5;
-    if (macdBull) { const v = strong ? 15 : 10; score += v; reasons.push(`MACD bullish ${strong ? 'strong' : 'weak'} +${v}`); }
-    else { const v = strong ? 15 : 10; score -= v; reasons.push(`MACD bearish ${strong ? 'strong' : 'weak'} -${v}`); }
-    // 3. MACD Histogram Momentum ±10
-    if (ind.macd.histogram > 0) { score += 10; reasons.push('Histogram bullish +10'); }
-    else { score -= 10; reasons.push('Histogram bearish -10'); }
-    // 4. RSI Zone ±15/−10/−20
-    const r = ind.rsi;
-    if (r > 70 || r < 30) { score -= 20; reasons.push(`RSI reversal risk ${r.toFixed(0)} -20`); }
-    else if (r >= 55 && r <= 70) { score += 15; reasons.push(`RSI bullish zone ${r.toFixed(0)} +15`); }
-    else if (r >= 30 && r <= 45) { score -= 15; reasons.push(`RSI bearish zone ${r.toFixed(0)} -15`); }
-    else { score -= 10; reasons.push(`RSI neutral ${r.toFixed(0)} -10`); }
-    // 5. Order Block ±20
-    if (ind.orderBlocks && ind.currentPrice) {
-        for (const ob of ind.orderBlocks.slice(-3)) {
-            if (ind.currentPrice >= ob.low && ind.currentPrice <= ob.high) {
-                const v = ob.type === 'bullish' ? 20 : -20;
-                score += v; reasons.push(`${ob.type} OB reaction ${v > 0 ? '+' : ''}${v}`); break;
-            }
-        }
-    }
-    // 6. Volume Spike ±10
-    if (ind.volSpike !== undefined) {
-        const dir = (ind.momentum || 0) >= 0 ? 1 : -1;
-        if (ind.volSpike > 1.5) { const v = 10 * dir; score += v; reasons.push(`Vol spike ${ind.volSpike.toFixed(1)}x ${v > 0 ? '+' : ''}${v}`); }
-        else { const v = -5 * dir; score += v; reasons.push(`Low vol ${v > 0 ? '+' : ''}${v}`); }
-    }
-    // 7. ATR Volatility Filter −15%
-    if (ind.atr && ind.currentPrice && ind.atr / ind.currentPrice < 0.001) {
-        score = Math.round(score * 0.85); reasons.push('Low ATR -15%');
-    }
-    return { score: Math.round(score), reasons };
-}
-
-function makePrediction(tf) {
+// ─── UNIFIED ML PREDICTION ENGINE (LOGISTIC REGRESSION) ──────────────────────
+function makePrediction(tf, mode = 'LIVE') {
     const tfMin = TF_SEC[tf] / 60;
     const candles = tf === '1m' ? state.baseCandles : aggCandles(state.baseCandles, tfMin);
     if (candles.length < 26) return null;
     const ind = state.tfIndicators[tf] || computeInd(candles);
-    const res = scoreIndicators(ind);
-    if (!res) return null;
-    const { score, reasons } = res;
-    if (Math.abs(score) < SCORE_MIN) return null; // No-trade zone
-    const direction = score > 0 ? 'UP' : 'DOWN';
-    const maxScore = 90;
-    const rawConf = Math.min(95, Math.round((Math.abs(score) / maxScore) * 100));
-    const confidence = Math.max(50, rawConf);
-    const threshold = state.ai.confidenceThreshold || THRESH_NORMAL;
-    if (confidence < threshold) return null;
-    // Track for bias
+    if (!ind.S) return null;
+
+    const w = state.mlWeights;
+    const S = ind.S;
+
+    // Linear combination (logistic regression)
+    const z = w.s_MACD * S.s_MACD + w.s_RSI * S.s_RSI + w.s_EMA * S.s_EMA +
+        w.s_OB * S.s_OB + w.s_VP * S.s_VP + w.s_VWAP * S.s_VWAP +
+        w.s_VOL * S.s_VOL + w.s_MS * S.s_MS + w.s_H * S.s_H +
+        w.s_OI * S.s_OI + w.s_FR * S.s_FR + w.bias;
+
+    // Sigmoid probability
+    const P_up = 1 / (1 + Math.exp(-z));
+    const ai = mode === 'LIVE' ? state.aiLIVE : state.aiSNAP;
+
+    // Threshold calculation (Expected Accuracy Opt)
+    const p_est = Math.max(P_up, 1 - P_up);
+    let theta = (ai.confidenceThreshold || 55) / 100;
+
+    // Ruin control
+    if (ai.rolling50Accuracy < 68 && theta < 0.65) theta = 0.65;
+
+    // Skip trade if probability is basically random
+    if (p_est < theta) return null;
+
+    const direction = P_up >= 0.5 ? 'UP' : 'DOWN';
+    const confidence = Math.round(p_est * 100);
+    const score = Math.round(z * 10); // Extrapolated UI score
+
+    const pred = {
+        tf, direction, confidence, score,
+        reasons: [`Logistic P(UP): ${(P_up * 100).toFixed(1)}%`, 'VWAP/Profile/OrderFlow Active', `Hurst: ${S.s_H > 0 ? 'Trending' : 'Mean-Reverting'}`],
+        price: ind.currentPrice, timestamp: Date.now(),
+        S, P_up // stored for gradient descent
+    };
+
     state.recentPreds.push({ direction, confidence });
     if (state.recentPreds.length > 100) state.recentPreds.shift();
-    return { tf, direction, confidence, score, reasons, price: ind.currentPrice, timestamp: Date.now() };
+    return pred;
 }
 
 // ─── PREDICTIONS ISSUE ────────────────────────────────────────────────────────
 function issuePredictions() {
-    if (state.ai.status === 'DEAD') return;
     const now = Date.now();
     for (const tf of ALL_TFS) {
-        const pred = makePrediction(tf);
+        if (state.aiLIVE.status === 'DEAD') {
+            state.predictions[tf] = null;
+            continue;
+        }
+        const pred = makePrediction(tf, 'LIVE');
         if (!pred) {
             if (!state.predictions[tf]) state.predictions[tf] = null;
             continue;
@@ -275,6 +357,7 @@ function issuePredictions() {
             state.pendingEvaluations.push({
                 tf, prediction: pred.direction, confidence: pred.confidence,
                 openPrice: pred.price, targetCloseTime: now + TF_SEC[tf] * 1000, issuedAt: now,
+                S: pred.S, P_up: pred.P_up // stored for SGD evaluation
             });
         }
     }
@@ -297,16 +380,31 @@ function evaluatePending() {
             priceDiff: parseFloat((price - ev.openPrice).toFixed(2)),
         };
         state.history.unshift(entry); if (state.history.length > 200) state.history.pop();
-        recordResult(correct, ev.prediction, ev.confidence, ev.tf);
+        recordResult('LIVE', correct, ev.prediction, ev.confidence, ev.tf);
+
+        // --- QUANT V5 LOGISTIC SGD UPDATE ---
+        if (ev.P_up !== undefined && ev.S) {
+            const y = actual === 'UP' ? 1 : 0;
+            const error = ev.P_up - y;
+            const eta = state.aiLIVE.rolling50Accuracy < 65 ? 0.005 : 0.01; // adaptive lr
+            for (const key of Object.keys(ev.S)) {
+                if (state.mlWeights[key] !== undefined) {
+                    state.mlWeights[key] -= eta * error * ev.S[key];
+                }
+            }
+            state.mlWeights.bias -= eta * error;
+        }
+
         broadcast({ type: 'EVALUATION', data: entry });
         // Re-issue
-        const np = makePrediction(ev.tf);
-        if (np && state.ai.status !== 'DEAD') {
+        const np = makePrediction(ev.tf, 'LIVE');
+        if (np && state.aiLIVE.status !== 'DEAD') {
             state.predictions[ev.tf] = np;
             state.pendingEvaluations.push({
                 tf: ev.tf, prediction: np.direction,
                 confidence: np.confidence, openPrice: price,
-                targetCloseTime: now + TF_SEC[ev.tf] * 1000, issuedAt: now
+                targetCloseTime: now + TF_SEC[ev.tf] * 1000, issuedAt: now,
+                S: np.S, P_up: np.P_up
             });
             broadcast({ type: 'PREDICTIONS', data: state.predictions });
         }
@@ -314,18 +412,22 @@ function evaluatePending() {
 }
 
 // ─── RECORD RESULT (SHARED BY CANDLE + SNAPSHOT) ─────────────────────────────
-function recordResult(correct, direction, confidence, tf) {
-    const ai = state.ai;
+function recordResult(mode, correct, direction, confidence, tf) {
+    const ai = mode === 'LIVE' ? state.aiLIVE : state.aiSNAP;
+    const rollingWindow = mode === 'LIVE' ? state.rollingWindowLIVE : state.rollingWindowSNAP;
+    const d = mode === 'LIVE' ? state.dailyStatsLIVE : state.dailyStatsSNAP;
+    const lt = mode === 'LIVE' ? state.lifetimeStatsLIVE : state.lifetimeStatsSNAP;
+
     if (correct) { ai.wins++; ai.streak = ai.streak >= 0 ? ai.streak + 1 : 1; ai.consecutiveLosses = 0; }
-    else { ai.losses++; ai.streak = ai.streak <= 0 ? ai.streak - 1 : -1; ai.consecutiveLosses++; ai.lives = Math.max(0, ai.lives - 1); broadcast({ type: 'LIFE_LOST', data: { livesLeft: ai.lives } }); }
+    else { ai.losses++; ai.streak = ai.streak <= 0 ? ai.streak - 1 : -1; ai.consecutiveLosses++; ai.lives = Math.max(0, ai.lives - 1); broadcast({ type: 'LIFE_LOST', data: { mode, livesLeft: ai.lives } }); }
     ai.totalPredictions++;
     ai.accuracy = Math.round((ai.wins / ai.totalPredictions) * 100);
     ai.longestWinStreak = Math.max(ai.longestWinStreak, ai.streak > 0 ? ai.streak : 0);
     ai.longestLossStreak = Math.max(ai.longestLossStreak, -ai.streak > 0 ? -ai.streak : 0);
     // Rolling window
-    state.rollingWindow.push(correct); if (state.rollingWindow.length > ROLLING_N) state.rollingWindow.shift();
-    const rollingAcc = state.rollingWindow.length >= 10
-        ? Math.round((state.rollingWindow.filter(Boolean).length / state.rollingWindow.length) * 100) : 100;
+    rollingWindow.push(correct); if (rollingWindow.length > ROLLING_N) rollingWindow.shift();
+    const rollingAcc = rollingWindow.length >= 10
+        ? Math.round((rollingWindow.filter(Boolean).length / rollingWindow.length) * 100) : 100;
     ai.rolling50Accuracy = rollingAcc;
     // Adaptive threshold
     if (rollingAcc < 68) { ai.confidenceThreshold = THRESH_STRICT; ai.volatilityMode = 'CONSERVATIVE'; }
@@ -336,73 +438,83 @@ function recordResult(correct, direction, confidence, tf) {
     ai.upBias = Math.round((up / tot) * 100); ai.downBias = 100 - ai.upBias;
     ai.avgConfidence = state.recentPreds.length ? Math.round(state.recentPreds.reduce((s, p) => s + p.confidence, 0) / state.recentPreds.length) : 0;
     // Daily
-    const d = state.dailyStats;
     d.total++; if (correct) d.wins++; else d.losses++;
     d.accuracy = Math.round((d.wins / d.total) * 100);
     if (d.byTF[tf]) { d.byTF[tf].t++; if (correct) d.byTF[tf].w++; }
     // Lifetime
-    const lt = state.lifetimeStats;
     lt.totalPredictions++; if (correct) lt.totalWins++; else lt.totalLosses++;
     lt.lifetimeAccuracy = Math.round((lt.totalWins / lt.totalPredictions) * 100);
     lt.highestWinStreak = Math.max(lt.highestWinStreak, ai.longestWinStreak);
-    checkSurvival();
+    checkSurvival(mode);
 }
 
 // ─── SURVIVAL + GENERATION ────────────────────────────────────────────────────
-function checkSurvival() {
-    const ai = state.ai; const rolling = ai.rolling50Accuracy;
+function checkSurvival(mode) {
+    const ai = mode === 'LIVE' ? state.aiLIVE : state.aiSNAP;
+    const rollingWindow = mode === 'LIVE' ? state.rollingWindowLIVE : state.rollingWindowSNAP;
+    const rolling = ai.rolling50Accuracy;
     let die = false, why = '';
     if (ai.lives <= 0) { die = true; why = 'NO_LIVES'; }
-    else if (state.rollingWindow.length >= 20 && rolling < DEATH_ACC) { die = true; why = 'LOW_ACCURACY'; }
+    else if (rollingWindow.length >= 20 && rolling < DEATH_ACC) { die = true; why = 'LOW_ACCURACY'; }
     else if (ai.consecutiveLosses >= 3) { die = true; why = '3_CONSECUTIVE_LOSSES'; }
     if (die) {
         ai.status = 'DEAD';
-        archiveGen();
-        broadcast({ type: 'AI_DIED', data: { generation: ai.generation, accuracy: ai.accuracy, reason: why } });
-        setTimeout(resurrectAI, 5000);
+        archiveGen(mode);
+        broadcast({ type: 'AI_DIED', data: { mode, generation: ai.generation, accuracy: ai.accuracy, reason: why } });
+        setTimeout(() => resurrectAI(mode), 5000);
         return;
     }
-    if (state.rollingWindow.length >= 10 && rolling < DANGER_ACC) ai.status = 'DANGER';
+    if (rollingWindow.length >= 10 && rolling < DANGER_ACC) ai.status = 'DANGER';
     else if (ai.consecutiveLosses >= 2) ai.status = 'CRITICAL';
     else ai.status = 'ALIVE';
-    broadcast({ type: 'AI_STATUS', data: ai });
-    broadcast({ type: 'DAILY_STATS', data: state.dailyStats });
-    broadcast({ type: 'LIFETIME_STATS', data: state.lifetimeStats });
+    broadcast({ type: 'AI_STATUS', data: { live: state.aiLIVE, snap: state.aiSNAP } });
+    broadcast({ type: 'DAILY_STATS', data: { live: state.dailyStatsLIVE, snap: state.dailyStatsSNAP } });
+    broadcast({ type: 'LIFETIME_STATS', data: { live: state.lifetimeStatsLIVE, snap: state.lifetimeStatsSNAP } });
 }
 
-function archiveGen() {
-    const ai = state.ai; const now = Date.now();
-    state.generations.push({
+function archiveGen(mode) {
+    const ai = mode === 'LIVE' ? state.aiLIVE : state.aiSNAP;
+    const lt = mode === 'LIVE' ? state.lifetimeStatsLIVE : state.lifetimeStatsSNAP;
+    const generations = mode === 'LIVE' ? state.generationsLIVE : state.generationsSNAP;
+    const now = Date.now();
+    generations.push({
         id: ai.generation, startTimeIST: fmtIST(ai.startTime || now), endTimeIST: fmtIST(now),
         totalPredictions: ai.totalPredictions, wins: ai.wins, losses: ai.losses, accuracy: ai.accuracy,
         longestWinStreak: ai.longestWinStreak, longestLossStreak: ai.longestLossStreak,
         survivalMinutes: Math.round((now - (ai.startTime || now)) / 60000), status: 'DEAD',
     });
-    const lt = state.lifetimeStats;
-    lt.totalGenerations = state.ai.generation + 1;
+    lt.totalGenerations = ai.generation + 1;
     lt.bestGenAccuracy = Math.max(lt.bestGenAccuracy, ai.accuracy);
     lt.worstGenAccuracy = Math.min(lt.worstGenAccuracy, ai.accuracy);
-    broadcast({ type: 'GENERATIONS', data: state.generations });
+    broadcast({ type: 'GENERATIONS', data: { live: state.generationsLIVE, snap: state.generationsSNAP } });
     persist();
 }
 
-function resurrectAI() {
-    const newGen = state.ai.generation + 1;
-    state.ai = freshAI(newGen);
-    state.rollingWindow = [];
-    state.pendingEvaluations = [];
-    state.lifetimeStats.totalGenerations = newGen;
-    broadcast({ type: 'AI_REVIVED', data: state.ai });
-    broadcast({ type: 'AI_STATUS', data: state.ai });
-    issuePredictions();
+function resurrectAI(mode) {
+    if (mode === 'LIVE') {
+        const newGen = state.aiLIVE.generation + 1;
+        state.aiLIVE = freshAI(newGen);
+        state.rollingWindowLIVE = [];
+        state.pendingEvaluations = [];
+        state.lifetimeStatsLIVE.totalGenerations = newGen;
+    } else {
+        const newGen = state.aiSNAP.generation + 1;
+        state.aiSNAP = freshAI(newGen);
+        state.rollingWindowSNAP = [];
+        state.lifetimeStatsSNAP.totalGenerations = newGen;
+    }
+    broadcast({ type: 'AI_REVIVED', data: { live: state.aiLIVE, snap: state.aiSNAP } });
+    broadcast({ type: 'AI_STATUS', data: { live: state.aiLIVE, snap: state.aiSNAP } });
+    if (mode === 'LIVE') issuePredictions();
 }
 
 // ─── DAILY RESET CHECK ────────────────────────────────────────────────────────
 function checkDailyReset() {
     const today = istDateStr();
-    if (state.dailyStats.date !== today) {
-        state.dailyStats = freshDaily();
-        broadcast({ type: 'DAILY_STATS', data: state.dailyStats });
+    if (state.dailyStatsLIVE.date !== today) {
+        state.dailyStatsLIVE = freshDaily();
+        state.dailyStatsSNAP = freshDaily();
+        broadcast({ type: 'DAILY_STATS', data: { live: state.dailyStatsLIVE, snap: state.dailyStatsSNAP } });
         persist();
         console.log('[IST] Daily stats reset for', today);
     }
@@ -507,20 +619,21 @@ function istBoundaries(ist) {
 }
 
 function createSnapshot(tf) {
-    if (!state.price || !state.dataReady || state.ai.status === 'DEAD') return;
+    if (!state.price || !state.dataReady || state.aiSNAP.status === 'DEAD') return;
     const now = Date.now();
     const epochMin = Math.floor((now + IST_MS) / 60000);
     const key = `${tf}:${epochMin}`;
     if (state.snapshotFiredKeys.has(key)) return;
     state.snapshotFiredKeys.add(key);
     if (state.snapshotFiredKeys.size > 300) state.snapshotFiredKeys = new Set([...state.snapshotFiredKeys].slice(-150));
-    const pred = makePrediction(tf); if (!pred) return;
+    const pred = makePrediction(tf, 'SNAP'); if (!pred) return;
     const snap = {
         id: `snap-${tf}-${now}`, snapshotTimeIST: fmtIST(now), evaluationTimeIST: fmtIST(now + TF_MS[tf]),
         timeframe: tf, snapshotPrice: state.price, predictedDirection: pred.direction,
         confidence: pred.confidence, score: pred.score, reasons: pred.reasons,
         lockedAt: now, evaluationTimestamp: now + TF_MS[tf],
         evaluatedPrice: null, actualDirection: null, result: 'PENDING',
+        S: pred.S, P_up: pred.P_up // Stored for SGD evaluation
     };
     state.snapshots.unshift(snap); if (state.snapshots.length > 200) state.snapshots.pop();
     console.log(`[IST] Snapshot ${tf} | ${pred.direction} ${pred.confidence}% | $${state.price.toFixed(2)}`);
@@ -538,12 +651,24 @@ function evalSnapshots() {
         s.evaluatedPrice = state.price;
         s.result = s.actualDirection === 'NEUTRAL' ? 'DRAW' : s.actualDirection === s.predictedDirection ? 'WIN' : 'LOSS';
         console.log(`[IST] Eval ${s.timeframe}: ${s.predictedDirection}→${s.actualDirection} | ${s.result} | Δ$${diff.toFixed(2)}`);
-        if (s.result !== 'DRAW') recordResult(s.result === 'WIN', s.predictedDirection, s.confidence, s.timeframe);
+
+        // Update Snapshot ML Loss (Gradient Descent)
+        if (s.result !== 'DRAW' && s.P_up !== undefined && s.S) {
+            const y = s.actualDirection === 'UP' ? 1 : 0;
+            const error = s.P_up - y;
+            const eta = state.aiSNAP.rolling50Accuracy < 65 ? 0.005 : 0.01;
+            for (const key of Object.keys(s.S)) {
+                if (state.mlWeights[key] !== undefined) state.mlWeights[key] -= eta * error * s.S[key];
+            }
+            state.mlWeights.bias -= eta * error;
+        }
+
+        if (s.result !== 'DRAW') recordResult('SNAP', s.result === 'WIN', s.predictedDirection, s.confidence, s.timeframe);
         // Track daily snap
-        state.dailyStats.snapshots = state.dailyStats.snapshots || { total: 0, wins: 0 };
-        state.dailyStats.snapshots.total++;
-        if (s.result === 'WIN') { state.dailyStats.snapshots.wins++; state.lifetimeStats.snapWins++; }
-        else if (s.result === 'LOSS') state.lifetimeStats.snapLosses++;
+        state.dailyStatsSNAP.snapshots = state.dailyStatsSNAP.snapshots || { total: 0, wins: 0 };
+        state.dailyStatsSNAP.snapshots.total++;
+        if (s.result === 'WIN') { state.dailyStatsSNAP.snapshots.wins++; state.lifetimeStatsSNAP.snapWins++; }
+        else if (s.result === 'LOSS') state.lifetimeStatsSNAP.snapLosses++;
         broadcast({ type: 'SNAPSHOT_EVALUATED', data: s }); changed = true;
     }
     if (changed) { broadcast({ type: 'SNAPSHOTS_UPDATE', data: state.snapshots.slice(0, 50) }); persist(); }
@@ -557,9 +682,11 @@ wss.on('connection', ws => {
         type: 'INIT', data: {
             baseCandles: state.baseCandles.slice(-300), tfIndicators: state.tfIndicators,
             indicators: state.indicators, predictions: state.predictions,
-            ai: state.ai, history: state.history, snapshots: state.snapshots.slice(0, 50),
-            generations: state.generations, dailyStats: state.dailyStats,
-            lifetimeStats: state.lifetimeStats, connected: state.connected, price: state.price,
+            ai: { live: state.aiLIVE, snap: state.aiSNAP }, history: state.history, snapshots: state.snapshots.slice(0, 50),
+            generations: { live: state.generationsLIVE, snap: state.generationsSNAP },
+            dailyStats: { live: state.dailyStatsLIVE, snap: state.dailyStatsSNAP },
+            lifetimeStats: { live: state.lifetimeStatsLIVE, snap: state.lifetimeStatsSNAP },
+            connected: state.connected, price: state.price,
         }
     }));
     ws.on('close', () => clients.delete(ws));
@@ -594,16 +721,16 @@ setInterval(() => {
 
 // Status heartbeat: every 5s
 setInterval(() => {
-    broadcast({ type: 'AI_STATUS', data: state.ai });
-    broadcast({ type: 'DAILY_STATS', data: state.dailyStats });
-    broadcast({ type: 'LIFETIME_STATS', data: state.lifetimeStats });
+    broadcast({ type: 'AI_STATUS', data: { live: state.aiLIVE, snap: state.aiSNAP } });
+    broadcast({ type: 'DAILY_STATS', data: { live: state.dailyStatsLIVE, snap: state.dailyStatsSNAP } });
+    broadcast({ type: 'LIFETIME_STATS', data: { live: state.lifetimeStatsLIVE, snap: state.lifetimeStatsSNAP } });
     if (state.price) broadcast({ type: 'PRICE', data: { price: state.price, time: state.lastTick } });
 }, 5000);
 
-// Indicator refresh: every 30s
+// Indicator refresh: every 1s
 setInterval(() => {
     if (state.baseCandles.length > 50) { computeAllTF(); broadcast({ type: 'TF_INDICATORS', data: state.tfIndicators }); }
-}, 30000);
+}, 1000);
 
 // Persist: every 30s
 setInterval(persist, 30000);

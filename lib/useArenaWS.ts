@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useCallback, useState } from 'react';
-import type { WSMessage, AIState, PredictionLog, Indicators, Prediction, Candle, SnapshotRecord, ISTTick, GenerationRecord, DailyStats, LifetimeStats } from '@/lib/types';
+import type { WSMessage, AIState, DualAIState, DualDailyStats, DualLifetimeStats, DualGenerations, PredictionLog, Indicators, Prediction, Candle, SnapshotRecord, ISTTick, GenerationRecord, DailyStats, LifetimeStats } from '@/lib/types';
 
 const DEFAULT_AI: AIState = {
     generation: 1, lives: 3, accuracy: 100, wins: 0, losses: 0, streak: 0, consecutiveLosses: 0,
@@ -18,6 +18,11 @@ const DEFAULT_LIFETIME: LifetimeStats = {
     bestGenAccuracy: 0, worstGenAccuracy: 100, highestWinStreak: 0,
     totalGenerations: 1, snapWins: 0, snapLosses: 0,
 };
+
+const DUAL_AI = { live: DEFAULT_AI, snap: DEFAULT_AI };
+const DUAL_DAILY = { live: DEFAULT_DAILY, snap: DEFAULT_DAILY };
+const DUAL_LIFETIME = { live: DEFAULT_LIFETIME, snap: DEFAULT_LIFETIME };
+const DUAL_GENS = { live: [], snap: [] };
 
 // Client-side candle aggregation for chart TF display
 export function aggCandles(c1m: Candle[], mins: number): Candle[] {
@@ -49,12 +54,12 @@ export function useArenaWS(url: string) {
     const [currentCandle, setCurrentCandle] = useState<Candle | null>(null);
     const [tfIndicators, setTFIndicators] = useState<Record<string, Partial<Indicators>>>({});
     const [predictions, setPredictions] = useState<Record<string, Prediction | null>>({});
-    const [ai, setAI] = useState<AIState>(DEFAULT_AI);
+    const [ai, setAI] = useState<DualAIState>(DUAL_AI);
     const [history, setHistory] = useState<PredictionLog[]>([]);
     const [snapshots, setSnapshots] = useState<SnapshotRecord[]>([]);
-    const [generations, setGenerations] = useState<GenerationRecord[]>([]);
-    const [dailyStats, setDailyStats] = useState<DailyStats>(DEFAULT_DAILY);
-    const [lifetimeStats, setLifetime] = useState<LifetimeStats>(DEFAULT_LIFETIME);
+    const [generations, setGenerations] = useState<DualGenerations>(DUAL_GENS);
+    const [dailyStats, setDailyStats] = useState<DualDailyStats>(DUAL_DAILY);
+    const [lifetimeStats, setLifetime] = useState<DualLifetimeStats>(DUAL_LIFETIME);
     const [istTick, setISTTick] = useState<ISTTick | null>(null);
     const [lifeAnim, setLifeAnim] = useState(false);
     const [deathAnim, setDeathAnim] = useState(false);

@@ -1,28 +1,49 @@
 'use client';
-import type { GenerationRecord, AIState } from '@/lib/types';
+import { useState } from 'react';
+import type { DualGenerations, DualAIState } from '@/lib/types';
 
-interface Props { generations: GenerationRecord[]; ai: AIState; }
+interface Props { generations: DualGenerations; ai: DualAIState; }
 
 export default function GenerationHistory({ generations, ai }: Props) {
+    const [mode, setMode] = useState<'live' | 'snap'>('live');
+
+    const currentAI = ai[mode];
+    const currentGenerations = generations[mode];
+
     const current = {
-        id: ai.generation, status: 'ACTIVE' as const,
+        id: currentAI.generation, status: 'ACTIVE' as const,
         startTimeIST: '', endTimeIST: null,
-        totalPredictions: ai.totalPredictions,
-        wins: ai.wins, losses: ai.losses, accuracy: ai.accuracy,
-        longestWinStreak: ai.longestWinStreak, longestLossStreak: ai.longestLossStreak,
+        totalPredictions: currentAI.totalPredictions,
+        wins: currentAI.wins, losses: currentAI.losses, accuracy: currentAI.accuracy,
+        longestWinStreak: currentAI.longestWinStreak, longestLossStreak: currentAI.longestLossStreak,
         survivalMinutes: 0,
     };
-    const all = [...generations, current].reverse(); // newest first
+    const all = [...currentGenerations, current].reverse(); // newest first
 
     return (
-        <div className="glass rounded-xl border border-arena-border overflow-hidden">
+        <div className="glass rounded-xl border border-arena-border overflow-hidden flex flex-col">
+            {/* Mode Toggle Header */}
+            <div className="flex border-b border-arena-border bg-[#0a1628]">
+                {(['live', 'snap'] as const).map(m => (
+                    <button key={m} onClick={() => setMode(m)}
+                        className="flex-1 py-2 text-[10px] font-mono font-bold tracking-widest transition-colors"
+                        style={{
+                            color: mode === m ? (m === 'live' ? '#8b5cf6' : '#f59e0b') : '#64748b',
+                            background: mode === m ? (m === 'live' ? 'rgba(139,92,246,0.1)' : 'rgba(245,158,11,0.1)') : 'transparent',
+                            borderBottom: mode === m ? `2px solid ${m === 'live' ? '#8b5cf6' : '#f59e0b'}` : '2px solid transparent',
+                        }}>
+                        {m === 'live' ? `LIVE PRED (GEN ${ai.live.generation})` : `SNAPSHOT (GEN ${ai.snap.generation})`}
+                    </button>
+                ))}
+            </div>
+
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-arena-border">
                 <div className="w-2 h-2 rounded-full bg-violet-400" />
-                <span className="text-xs font-mono font-bold tracking-widest text-slate-400">GENERATION HISTORY</span>
+                <span className="text-xs font-mono font-bold tracking-widest text-slate-400">GENERATION HISTORY · {mode.toUpperCase()}</span>
                 <span className="text-xs font-mono text-slate-600 ml-auto">{all.length} total</span>
             </div>
-            <div className="overflow-y-auto" style={{ maxHeight: '260px' }}>
-                {all.map(gen => {
+            <div className="overflow-y-auto flex-1" style={{ maxHeight: '260px' }}>
+                {all.map((gen, idx) => {
                     const active = gen.status === 'ACTIVE';
                     const accColor = gen.accuracy >= 70 ? '#10b981' : gen.accuracy >= 65 ? '#f59e0b' : '#ef4444';
                     return (
