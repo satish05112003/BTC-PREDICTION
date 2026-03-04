@@ -1,3 +1,4 @@
+
 # BTC Prediction Arena 🚀
 
 **BTC Prediction Arena** is a real-time, live cryptocurrency prediction engine and visualization dashboard. It watches live Bitcoin prices from Coinbase, runs a mathematical scoring model over multiple indicators, and predicts price movement using a built-in AI Survival Game mechanic across multiple timeframes.
